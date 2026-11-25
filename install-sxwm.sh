@@ -11,7 +11,8 @@ fi
 PKGS="
 gcc make meson ninja pkg-config
 libX11-devel libXinerama-devel libXcursor-devel
-libXft-devel libXext-devel fontconfig-devel freetype-devel
+libXft-devel libXext-devel libXi-devel
+fontconfig-devel freetype-devel
 pipewire wireplumber
 brightnessctl terminus-font
 dmenu xinit dbus
