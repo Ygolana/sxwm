@@ -29,24 +29,25 @@ $ROOT ln -sf /etc/sv/wireplumber   /var/service/
 # ── brightness permission ──────────────────────────────────────────────
 $ROOT usermod -aG video "$USER"
 
+# ── build workspace ────────────────────────────────────────────────────
+BUILD_DIR=$(mktemp -d)
+trap 'rm -rf "$BUILD_DIR"' EXIT
+
 # ── build & install sxwm ───────────────────────────────────────────────
-git clone --depth 1 https://github.com/uint23/sxwm /tmp/sxwm
-cd /tmp/sxwm
-make
-$ROOT make install
+git clone --depth 1 https://github.com/uint23/sxwm "$BUILD_DIR/sxwm"
+make -C "$BUILD_DIR/sxwm"
+$ROOT make -C "$BUILD_DIR/sxwm" install
 
 # ── build & install sxbar ──────────────────────────────────────────────
-git clone --depth 1 https://github.com/uint23/sxbar /tmp/sxbar
-cd /tmp/sxbar
-make
-$ROOT make install
+git clone --depth 1 https://github.com/uint23/sxbar "$BUILD_DIR/sxbar"
+make -C "$BUILD_DIR/sxbar"
+$ROOT make -C "$BUILD_DIR/sxbar" install
 
 # ── build & install cterm ──────────────────────────────────────────────
-git clone --depth 1 https://github.com/uint23/cterm /tmp/cterm
-cd /tmp/cterm
-meson setup build
-meson compile -C build
-$ROOT meson install -C build
+git clone --depth 1 https://github.com/uint23/cterm "$BUILD_DIR/cterm"
+meson setup "$BUILD_DIR/cterm/build" "$BUILD_DIR/cterm"
+meson compile -C "$BUILD_DIR/cterm/build"
+$ROOT meson install -C "$BUILD_DIR/cterm/build"
 
 # ── configuration files ────────────────────────────────────────────────
 mkdir -p "$HOME/.config/sxwm" "$HOME/.config/sxbar" "$HOME/.config/cterm"
