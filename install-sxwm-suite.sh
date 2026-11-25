@@ -28,10 +28,20 @@ git clone --depth 1 https://github.com/uint23/sxbar
 git clone --depth 1 https://github.com/uint23/cterm
 
 make -C sxbar all install
-sed -i "s|\".*\.bdf\"|\"$BDF\"|" cterm/config.h
-meson setup cterm/build cterm >/dev/null
-meson compile -C cterm/build >/dev/null
-install -m755 cterm/build/cterm /usr/local/bin/
+
+cd cterm
+[[ -f config.h ]] || [[ ! -f config.def.h ]] || cp config.def.h config.h
+if [[ -f config.h ]]; then
+    sed -i "s|\"[^\"]*\.bdf\"|\"$BDF\"|" config.h
+    grep -q "$BDF" config.h || \
+        echo "WARNING: could not patch font path in cterm/config.h — edit it manually."
+else
+    echo "WARNING: no config.h/config.def.h in cterm — using upstream default font."
+fi
+
+meson setup build >/dev/null
+meson compile -C build >/dev/null
+install -m755 build/cterm /usr/local/bin/
 cd /tmp && rm -rf sxbar cterm
 
 # --- Auto-start for the first regular user on tty1 ---
