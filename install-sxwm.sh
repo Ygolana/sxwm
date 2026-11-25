@@ -13,9 +13,10 @@ gcc make meson ninja pkg-config
 libX11-devel libXinerama-devel libXcursor-devel
 libXft-devel libXext-devel libXi-devel
 fontconfig-devel freetype-devel
+xorg-server xinit xauth xf86-input-libinput
 pipewire wireplumber
 brightnessctl terminus-font
-dmenu xinit dbus
+dmenu dbus
 "
 echo "==> Installing packages..."
 $PRIV xbps-install -Syu $PKGS
