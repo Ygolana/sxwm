@@ -3,7 +3,7 @@
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "Run as root"; exit 1; }
 
-# --- Packages (only what's actually needed) ---
+# --- Packages ---
 xbps-install -Syu
 xbps-install -y \
     gcc make pkg-config meson ninja git curl \
@@ -15,9 +15,10 @@ xbps-install -y \
 ln -sf /etc/sv/dbus    /var/service/
 ln -sf /etc/sv/elogind /var/service/
 
-# --- Cozette BDF (cterm requires BDF; font-cozette package has none) ---
+# --- Cozette BDF (cterm requires BDF) ---
 BDF=/usr/share/fonts/misc/cozette.bdf
-[[ -f $BDF ]] || curl -L -o "$BDF" \
+mkdir -p "$(dirname "$BDF")"
+[[ -s $BDF ]] || curl -fL --create-dirs -o "$BDF" \
     https://github.com/slavfox/Cozette/releases/download/v.1.30.0/cozette.bdf
 fc-cache -f >/dev/null
 
