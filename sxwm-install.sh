@@ -1,167 +1,156 @@
 #!/usr/bin/env bash
-#
-# install-uint23.sh
-# Installs sxwm, sxbar, cterm, and uint23 dotfiles from source on Void Linux.
-#
+# install-sxwm-sxbar-cterm.sh
+# Fresh Void Linux base install -> X11 + sxwm + sxbar + cterm + Terminus bitmap font.
 set -euo pipefail
+IFS=$'\n\t'
 
-# ------------------------------------------------------------------
-# Configuration
-# ------------------------------------------------------------------
-REPO_SXWM="https://github.com/uint23/sxwm.git"
-REPO_SXBAR="https://github.com/uint23/sxbar.git"
-REPO_CTERM="https://github.com/uint23/cterm.git"
-REPO_DOTS="https://github.com/uint23/uint23.git"
+info() { printf '\033[1;34m[*]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
+die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
-TMP_DIR="$(mktemp -d /tmp/uint23-install.XXXXXX)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+# ---------- sanity checks ----------
+[ -f /etc/void-release ] || die "This script is intended for Void Linux."
+command -v xbps-install >/dev/null 2>&1 || die "xbps-install not found."
 
-# Privilege escalation helper
-if [[ $EUID -eq 0 ]]; then
-    SUDO=""
-elif command -v sudo &>/dev/null; then
-    SUDO="sudo"
-elif command -v doas &>/dev/null; then
-    SUDO="doas"
+# ---------- root helper ----------
+if [ "$(id -u)" -eq 0 ]; then
+  SUDO=()
+elif command -v sudo >/dev/null 2>&1; then
+  SUDO=(sudo)
+elif command -v doas >/dev/null 2>&1; then
+  SUDO=(doas)
 else
-    echo "ERROR: Neither sudo nor doas found. Please install one or run as root."
-    exit 1
+  die "Run as root, or install sudo/doas first."
+fi
+run_root() { "${SUDO[@]}" "$@"; }
+
+# ---------- configuration ----------
+TERMINUS_PKG="terminus-font"
+TERMINUS_BDF="ter-u14n.bdf"
+TERMINUS_BDF_BOLD="ter-u14b.bdf"
+
+FONT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/terminus"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "$BUILD_DIR"' EXIT
+
+# ---------- 1. system packages ----------
+info "Syncing XBPS and installing build/runtime dependencies ..."
+run_root xbps-install -Sy \
+  git curl tar gcc make pkgconf \
+  meson ninja \
+  xorg-server xinit xf86-input-libinput \
+  libX11-devel libXinerama-devel libXcursor-devel \
+  libXft-devel libXext-devel libXi-devel \
+  fontconfig fontconfig-devel freetype-devel \
+  "$TERMINUS_PKG"
+
+# ---------- 2. Terminus BDF for cterm ----------
+info "Installing Terminus BDF for cterm ..."
+mkdir -p "$FONT_DIR"
+
+TERMINUS_VERSION="4.49.1"
+TERMINUS_URL="https://downloads.sourceforge.net/project/terminus-font/terminus-font-4.49/terminus-font-${TERMINUS_VERSION}.tar.gz"
+TERMINUS_TAR="$BUILD_DIR/terminus-font-${TERMINUS_VERSION}.tar.gz"
+
+if curl -fL --retry 3 --connect-timeout 15 -o "$TERMINUS_TAR" "$TERMINUS_URL"; then
+  tar -xzf "$TERMINUS_TAR" -C "$BUILD_DIR"
+  for bdf in "$TERMINUS_BDF" "$TERMINUS_BDF_BOLD"; do
+    src="$(find "$BUILD_DIR" -maxdepth 4 -type f -name "$bdf" -print -quit)"
+    [ -n "$src" ] || die "Could not find $bdf in the Terminus tarball."
+    install -Dm644 "$src" "$FONT_DIR/$bdf"
+  done
+else
+  warn "SourceForge download failed; trying FreeBSD's Terminus 4.49.1 mirror."
+  curl -fL --retry 3 \
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/contrib/terminus/$TERMINUS_BDF" \
+    -o "$FONT_DIR/$TERMINUS_BDF"
+  curl -fL --retry 3 \
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/contrib/terminus/$TERMINUS_BDF_BOLD" \
+    -o "$FONT_DIR/$TERMINUS_BDF_BOLD" || true
 fi
 
-# Determine target user home (if running via sudo, use SUDO_USER)
-TARGET_USER="${SUDO_USER:-$USER}"
-TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+# ---------- 3. font cache ----------
+info "Refreshing font cache ..."
+fc-cache -f "$FONT_DIR" >/dev/null 2>&1 || true
+fc-cache -f >/dev/null 2>&1 || true
 
-# ------------------------------------------------------------------
-# Helper functions
-# ------------------------------------------------------------------
-log()  { printf '\n\033[1;34m[INFO]\033[0m %s\n' "$*"; }
-warn() { printf '\n\033[1;33m[WARN]\033[0m %s\n' "$*"; }
-die()  { printf '\n\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
+# ---------- 4. sxwm ----------
+info "Building and installing sxwm ..."
+git clone --depth=1 https://github.com/uint23/sxwm.git "$BUILD_DIR/sxwm"
+(
+  cd "$BUILD_DIR/sxwm"
+  make CC=gcc
+  run_root make CC=gcc install
+)
 
-check_void() {
-    if ! grep -qi 'void' /etc/os-release 2>/dev/null; then
-        die "This script is intended for Void Linux only."
-    fi
-    log "Void Linux detected."
-}
+# ---------- 5. sxbar ----------
+info "Building and installing sxbar ..."
+git clone --depth=1 https://github.com/uint23/sxbar.git "$BUILD_DIR/sxbar"
+(
+  cd "$BUILD_DIR/sxbar"
+  make CC=gcc
+  run_root make CC=gcc install
+)
 
-install_packages() {
-    log "Installing build dependencies..."
-    $SUDO xbps-install -Sy \
-        git gcc make meson ninja pkg-config \
-        libX11-devel libXinerama-devel libXcursor-devel \
-        libXft-devel freetype-devel fontconfig-devel \
-        libXext-devel libXi-devel xorgproto
-}
+# ---------- 6. cterm ----------
+info "Building and installing cterm with X11 backend ..."
+git clone --depth=1 https://github.com/uint23/cterm.git "$BUILD_DIR/cterm"
+(
+  cd "$BUILD_DIR/cterm"
 
-build_sxwm() {
-    log "Building and installing sxwm..."
-    git clone --depth=1 "$REPO_SXWM" "$TMP_DIR/sxwm"
-    (
-        cd "$TMP_DIR/sxwm"
-        make
-        $SUDO make install
-    )
-    log "sxwm installed successfully."
-}
+  # cterm only supports BDF. Point it at the Terminus BDF we just installed.
+  cp config.def.h config.h
+  sed -i "s|\"monospace.bdf\"|\"$FONT_DIR/$TERMINUS_BDF\"|" config.h
 
-build_sxbar() {
-    log "Building and installing sxbar..."
-    git clone --depth=1 "$REPO_SXBAR" "$TMP_DIR/sxbar"
-    (
-        cd "$TMP_DIR/sxbar"
-        make
-        $SUDO make install
-    )
-    log "sxbar installed successfully."
-}
+  export CC=gcc
+  meson setup build --buildtype=release -Dwindow_backend=x11
+  meson compile -C build
+  run_root meson install -C build
+)
 
-build_cterm() {
-    log "Building and installing cterm..."
-    git clone --depth=1 "$REPO_CTERM" "$TMP_DIR/cterm"
-    (
-        cd "$TMP_DIR/cterm"
-        meson setup build --prefix=/usr/local
-        meson compile -C build
-        $SUDO meson install -C build
-    )
-    log "cterm installed successfully."
-}
+# ---------- 7. user configuration ----------
+info "Writing sxwm, sxbar, and xinitrc configuration ..."
+mkdir -p "$CONFIG_DIR/sxbar"
 
-install_dotfiles() {
-    log "Installing uint23 dotfiles to $TARGET_HOME ..."
-    git clone --depth=1 "$REPO_DOTS" "$TMP_DIR/dots"
+# sxwm: use cterm as the default terminal instead of "st"
+cp /usr/local/share/sxwmrc "$CONFIG_DIR/sxwmrc"
+sed -i 's|bind : mod + Return : "st"|bind : mod + Return : "cterm"|' "$CONFIG_DIR/sxwmrc"
 
-    # Backup existing dotfiles if they exist
-    for item in .config .mkshrc .vimrc .Xmodmap autostart userChrome.css wallpapers; do
-        if [[ -e "$TARGET_HOME/$item" ]]; then
-            warn "Backing up existing $TARGET_HOME/$item -> $TARGET_HOME/$item.bak"
-            mv "$TARGET_HOME/$item" "$TARGET_HOME/$item.bak"
-        fi
-    done
+# sxbar: use the packaged Terminus bitmap font
+cp /usr/local/share/sxbarc "$CONFIG_DIR/sxbar/sxbarc"
+sed -i 's|^font : monospace|font : Terminus|' "$CONFIG_DIR/sxbar/sxbarc"
 
-    # Copy everything from the dotfiles repo into the home directory
-    cp -a "$TMP_DIR/dots/." "$TARGET_HOME/"
-    chown -R "$TARGET_USER:" "$TARGET_HOME/.config" "$TARGET_HOME/.mkshrc" \
-        "$TARGET_HOME/.vimrc" "$TARGET_HOME/.Xmodmap" \
-        "$TARGET_HOME/autostart" "$TARGET_HOME/userChrome.css" \
-        "$TARGET_HOME/wallpapers" 2>/dev/null || true
-
-    log "Dotfiles installed."
-}
-
-setup_configs() {
-    log "Setting up default configuration files..."
-
-    # sxwm: copy default config to ~/.config/sxwmrc
-    if [[ ! -f "$TARGET_HOME/.config/sxwmrc" ]]; then
-        cp /usr/local/share/sxwmrc "$TARGET_HOME/.config/sxwmrc"
-        chown "$TARGET_USER:" "$TARGET_HOME/.config/sxwmrc"
-        log "Created ~/.config/sxwmrc"
-    fi
-
-    # sxbar: copy default config to ~/.config/sxbar/sxbarc
-    mkdir -p "$TARGET_HOME/.config/sxbar"
-    if [[ ! -f "$TARGET_HOME/.config/sxbar/sxbarc" ]]; then
-        cp /usr/local/share/sxbarc "$TARGET_HOME/.config/sxbar/sxbarc"
-        chown -R "$TARGET_USER:" "$TARGET_HOME/.config/sxbar"
-        log "Created ~/.config/sxbar/sxbarc"
-    fi
-}
-
-print_post_install() {
-    cat <<'EOF'
-
-✅  All components installed successfully!
-
-Next steps:
-  1. To start sxwm with startx, add the following to ~/.xinitrc:
-         exec sxwm
-  2. If you use a display manager, select "sxwm" from the session menu.
-  3. sxbar can be launched manually or added to your sxwm autostart file:
-         sxbar &
-  4. cterm is available as `cterm`.
-  5. Review and customise the configuration files:
-         ~/.config/sxwmrc
-         ~/.config/sxbar/sxbarc
-  6. Log out and back in (or restart your display manager) to apply changes.
-
+# xinitrc: start sxbar, then sxwm
+if [ -f "$HOME/.xinitrc" ]; then
+  cp "$HOME/.xinitrc" "$HOME/.xinitrc.bak.$(date +%s)"
+fi
+cat > "$HOME/.xinitrc" <<'EOF'
+#!/bin/sh
+sxbar &
+exec sxwm
 EOF
-}
+chmod +x "$HOME/.xinitrc"
 
-# ------------------------------------------------------------------
-# Main
-# ------------------------------------------------------------------
-main() {
-    check_void
-    install_packages
-    build_sxwm
-    build_sxbar
-    build_cterm
-    install_dotfiles
-    setup_configs
-    print_post_install
-}
+info "Installation complete."
+cat <<EOF
 
-main "$@"
+Installed:
+  sxwm          -> /usr/local/bin/sxwm
+  sxbar         -> /usr/local/bin/sxbar
+  cterm         -> /usr/local/bin/cterm
+  Terminus BDF  -> $FONT_DIR/$TERMINUS_BDF
+  sxwm config   -> $CONFIG_DIR/sxwmrc
+  sxbar config  -> $CONFIG_DIR/sxbar/sxbarc
+  xinitrc       -> $HOME/.xinitrc
+
+Start X with:
+  startx
+
+Check the font:
+  fc-list | grep -i terminus
+  ls -l "$FONT_DIR/$TERMINUS_BDF"
+
+If you want a different Terminus size, change TERMINUS_BDF in this script
+(for example ter-u16n.bdf) and adjust font_size in the sxbar config.
+EOF
