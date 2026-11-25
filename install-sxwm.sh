@@ -17,8 +17,8 @@ $ROOT xbps-install -y \
     gcc make pkg-config git meson ninja \
     libX11-devel libXinerama-devel libXcursor-devel \
     libXext-devel libXi-devel libXft-devel \
-    fontconfig-devel \
-    xorg-minimal xinit xauth xf86-input-libinput xf86-video-vesa \
+    fontconfig-devel xf86-video-vmware \ 
+    xorg-minimal xinit xauth xf86-input-libinput xf86-video-intel \
     terminus-font \
     pipewire wireplumber \
     brightnessctl
