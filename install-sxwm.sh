@@ -1,258 +1,140 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-# ----------------------------------------------------------------------
-# Privilege escalation
-# ----------------------------------------------------------------------
+BUILD_DIR="$HOME/.cache/sxwm-build"
+FONT_BDF_URL="https://sourceforge.net/projects/terminus-font/files/terminus-font-4.49.1/terminus-font-4.49.1.tar.gz/download"
+FONT_DIR="/usr/local/share/fonts/terminus-bdf"
+
 if command -v sudo >/dev/null 2>&1; then
     PRIV="sudo"
 elif command -v doas >/dev/null 2>&1; then
     PRIV="doas"
 else
-    echo "Error: neither sudo nor doas found." >&2
+    echo "Neither sudo nor doas found" >&2
     exit 1
 fi
 
-# ----------------------------------------------------------------------
-# Package groups
-# ----------------------------------------------------------------------
-BUILD_DEPS="gcc make meson ninja pkg-config git"
-SXWM_DEPS="libX11-devel libXinerama-devel libXcursor-devel"
-SXBAR_DEPS="libX11-devel libXinerama-devel libXft-devel fontconfig-devel freetype-devel"
-CTERM_DEPS="libX11-devel libXext-devel libXi-devel"
-XORG_PKGS="xorg-minimal xinit xf86-video-intel xf86-input-libinput font-misc-misc"
-AUDIO_PKGS="pipewire wireplumber dbus"
-UTIL_PKGS="brightnessctl dmenu"
+# Base packages: Xorg core, Intel (modesetting + Mesa DRI), input, audio, brightness, font
+$PRIV xbps-install -Sy \
+    xorg-server xinit xf86-input-libinput mesa-dri \
+    dbus elogind \
+    pipewire wireplumber \
+    brightnessctl \
+    terminus-font fontconfig
 
-# ----------------------------------------------------------------------
-# Helpers
-# ----------------------------------------------------------------------
-repair_package_state() {
-    echo "==> Cleaning cache and orphaned packages..." >&2
-    $PRIV rm -rf /var/cache/xbps/*
-    $PRIV xbps-remove -Oo || true
+# Build-only packages (removed at the end)
+$PRIV xbps-install -Sy \
+    git gcc make pkg-config meson ninja \
+    libX11-devel libXinerama-devel libXcursor-devel \
+    libXft-devel freetype-devel fontconfig-devel \
+    tar curl
 
-    echo "==> Force-removing packages that pin old X11 libraries..." >&2
-    $PRIV xbps-remove -F libXfixes-devel libXrender-devel 2>/dev/null || true
-}
+# Fonts: enable bitmap fonts for Xft (sxbar) and rebuild font cache
+$PRIV ln -sfn /usr/share/fontconfig/conf.avail/70-yes-bitmaps.conf /etc/fonts/conf.d/70-yes-bitmaps.conf
+$PRIV xbps-reconfigure -f fontconfig
 
-install_pkgs() {
-    repair_package_state
+# Services: system bus, seat/session management (XDG_RUNTIME_DIR for PipeWire)
+for svc in dbus elogind; do
+    [ -e "/var/service/$svc" ] || $PRIV ln -s "/etc/sv/$svc" /var/service/
+done
 
-    echo "==> Performing full verbose upgrade..." >&2
-    $PRIV xbps-install -Suv
+# Brightness without root: video group + udev rule for backlight nodes
+$PRIV usermod -aG video "$(id -un)"
+$PRIV tee /etc/udev/rules.d/90-backlight.rules >/dev/null <<'EOF'
+ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod g+w /sys/class/backlight/%k/brightness"
+EOF
 
-    echo "==> Installing required packages..." >&2
-    $PRIV xbps-install -Sy "$@"
-}
-
-cleanup() {
-    rm -rf /tmp/sxwm /tmp/sxbar /tmp/cterm /tmp/spleen /tmp/libgrapheme
-}
-trap cleanup EXIT
-
-# ----------------------------------------------------------------------
-# Install system packages
-# ----------------------------------------------------------------------
-install_pkgs $BUILD_DEPS $SXWM_DEPS $SXBAR_DEPS $CTERM_DEPS $XORG_PKGS $AUDIO_PKGS $UTIL_PKGS
-
-# ----------------------------------------------------------------------
-# Build and install libgrapheme (required by cterm)
-# ----------------------------------------------------------------------
-if ! pkg-config --exists libgrapheme; then
-    git clone --depth=1 https://github.com/FRIGN/libgrapheme.git /tmp/libgrapheme
-    cd /tmp/libgrapheme
-    make
-    $PRIV make PREFIX=/usr install
-    cd /
-fi
-
-# ----------------------------------------------------------------------
-# Build and install sxwm
-# ----------------------------------------------------------------------
-if ! command -v sxwm >/dev/null 2>&1; then
-    git clone --depth=1 https://github.com/uint23/sxwm.git /tmp/sxwm
-    cd /tmp/sxwm
-    make
-    $PRIV make install
-    cd /
-fi
-
-# ----------------------------------------------------------------------
-# Build and install sxbar
-# ----------------------------------------------------------------------
-if ! command -v sxbar >/dev/null 2>&1; then
-    git clone --depth=1 https://github.com/uint23/sxbar.git /tmp/sxbar
-    cd /tmp/sxbar
-    make
-    $PRIV make install
-    cd /
-fi
-
-# ----------------------------------------------------------------------
-# Build and install cterm
-# ----------------------------------------------------------------------
-if ! command -v cterm >/dev/null 2>&1; then
-    git clone --depth=1 https://github.com/uint23/cterm.git /tmp/cterm
-    cd /tmp/cterm
-    meson setup build --prefix=/usr
-    meson compile -C build
-    $PRIV meson install -C build
-    cd /
-fi
-
-# ----------------------------------------------------------------------
-# Install Spleen 5x8 BDF font (for cterm)
-# ----------------------------------------------------------------------
-if [ ! -f "$HOME/.local/share/fonts/spleen-5x8.bdf" ]; then
-    git clone --depth=1 https://github.com/fcambus/spleen.git /tmp/spleen
-    mkdir -p "$HOME/.local/share/fonts"
-    cp /tmp/spleen/spleen-5x8.bdf "$HOME/.local/share/fonts/"
-    fc-cache -f "$HOME/.local/share/fonts"
-fi
-
-# ----------------------------------------------------------------------
-# Enable D-Bus system service (PipeWire/WirePlumber start in session)
-# ----------------------------------------------------------------------
-$PRIV ln -sf /etc/sv/dbus /var/service/
-
-# ----------------------------------------------------------------------
-# Configuration files (written only if missing)
-# ----------------------------------------------------------------------
-CONFIG_DIR="$HOME/.config"
-mkdir -p "$CONFIG_DIR/sxwm" "$CONFIG_DIR/sxbar" "$CONFIG_DIR/cterm"
+# Terminus BDF source for cterm (cterm needs BDF, not OTB/PCF)
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+curl -fL "$FONT_BDF_URL" -o terminus.tar.gz
+tar -xzf terminus.tar.gz
+TERM_BDF="$(find "$BUILD_DIR" -name 'ter-u16n.bdf' -print -quit)"
+$PRIV install -Dm644 "$TERM_BDF" "$FONT_DIR/ter-u16n.bdf"
 
 # sxwm
-if [ ! -f "$CONFIG_DIR/sxwm/sxwmrc" ]; then
-    cat > "$CONFIG_DIR/sxwm/sxwmrc" <<'EOF'
-mod_key: super
-
-bind: mod + Return : "cterm"
-bind: mod + d : "dmenu_run"
-
-call: mod + shift + q : close_window
-call: mod + shift + e : quit
-call: mod + r : reload_config
-
-# workspace navigation
-workspace: mod + 1 : move 1
-workspace: mod + 2 : move 2
-workspace: mod + 3 : move 3
-workspace: mod + 4 : move 4
-workspace: mod + 5 : move 5
-workspace: mod + 6 : move 6
-workspace: mod + 7 : move 7
-workspace: mod + 8 : move 8
-workspace: mod + 9 : move 9
-
-# move focused window to workspace
-workspace: mod + shift + 1 : swap 1
-workspace: mod + shift + 2 : swap 2
-workspace: mod + shift + 3 : swap 3
-workspace: mod + shift + 4 : swap 4
-workspace: mod + shift + 5 : swap 5
-workspace: mod + shift + 6 : swap 6
-workspace: mod + shift + 7 : swap 7
-workspace: mod + shift + 8 : swap 8
-workspace: mod + shift + 9 : swap 9
-
-call: mod + j : focus_next
-call: mod + k : focus_prev
-
-call: mod + l : master_increase
-call: mod + h : master_decrease
-call: mod + space : toggle_floating
-call: mod + shift + f : fullscreen
-
-bind: XF86AudioRaiseVolume : "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"
-bind: XF86AudioLowerVolume : "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
-bind: XF86AudioMute : "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
-
-bind: XF86MonBrightnessUp : "brightnessctl set 5%+"
-bind: XF86MonBrightnessDown : "brightnessctl set 5%-"
-EOF
-fi
+git clone --depth 1 https://github.com/uint23/sxwm.git "$BUILD_DIR/sxwm"
+make -C "$BUILD_DIR/sxwm"
+$PRIV make -C "$BUILD_DIR/sxwm" PREFIX=/usr/local install
 
 # sxbar
-if [ ! -f "$CONFIG_DIR/sxbar/sxbarc" ]; then
-    cat > "$CONFIG_DIR/sxbar/sxbarc" <<'EOF'
+git clone --depth 1 https://github.com/uint23/sxbar.git "$BUILD_DIR/sxbar"
+make -C "$BUILD_DIR/sxbar"
+$PRIV make -C "$BUILD_DIR/sxbar" PREFIX=/usr/local install
+
+# cterm (compile-time config: point font_path at the installed BDF)
+git clone --depth 1 https://github.com/uint23/cterm.git "$BUILD_DIR/cterm"
+sed -i "s|\"monospace.bdf\"|\"$FONT_DIR/ter-u16n.bdf\"|" "$BUILD_DIR/cterm/config.def.h"
+meson setup "$BUILD_DIR/cterm/build" "$BUILD_DIR/cterm" --prefix=/usr/local --buildtype=release
+ninja -C "$BUILD_DIR/cterm/build"
+$PRIV ninja -C "$BUILD_DIR/cterm/build" install
+
+# sxwm keybinds (format: bind|workspace <combo> : <action>)
+mkdir -p "$HOME/.config"
+cat > "$HOME/.config/sxwmrc" <<'EOF'
+bind mod+Return : "cterm"
+bind mod+shift+c : close_window
+bind mod+f : fullscreen
+bind mod+space : toggle_floating
+bind mod+j : focus_next
+bind mod+k : focus_prev
+bind mod+shift+j : move_win_down
+bind mod+shift+k : move_win_up
+bind mod+h : master_decrease
+bind mod+l : master_increase
+bind mod+shift+r : reload_config
+bind mod+shift+e : quit
+bind mod+Tab : switch_previous_workspace
+EOF
+for ws in 1 2 3 4 5 6 7 8 9; do
+    printf 'workspace mod+%s : move %s\nworkspace mod+shift+%s : swap %s\n' "$ws" "$ws" "$ws" "$ws" >> "$HOME/.config/sxwmrc"
+done
+cat >> "$HOME/.config/sxwmrc" <<'EOF'
+bind XF86AudioRaiseVolume : "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+"
+bind XF86AudioLowerVolume : "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+bind XF86AudioMute : "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+bind XF86MonBrightnessUp : "brightnessctl set 5%+"
+bind XF86MonBrightnessDown : "brightnessctl set 5%-"
+EOF
+
+# sxbar config: bottom bar, Terminus, clock + workspace labels
+mkdir -p "$HOME/.config/sxbar"
+cat > "$HOME/.config/sxbar/sxbarc" <<'EOF'
 bar_position: top
-height: 24
-background_colour: #171717
-foreground_colour: #fffde0
-font: fixed
-
-# left: workspaces (only active, roman numerals)
-workspaces.labels: I II III IV V VI VII VIII IX
-workspaces.only_active: true
-workspaces.position: left
-workspaces.active_background: #717394
-workspaces.active_foreground: #fffde0
-workspaces.inactive_background: #171717
-workspaces.inactive_foreground: #fffde0
-workspaces.padding_left: 10
-workspaces.padding_right: 10
-workspaces.spacing: 0
-
-# middle: time and date
+height: 20
+font: Terminus
+font_size: 16
+background_colour: #000000
+foreground_colour: #cccccc
 module.0.name: clock
-module.0.cmd: date '+%H:%M:%S'
-module.0.interval: 1
-module.0.position: middle
+module.0.cmd: date '+%a %d %b %H:%M'
+module.0.enabled: true
+module.0.interval: 30
+EOF
 
-module.1.name: date
-module.1.cmd: date '+%Y-%m-%d'
-module.1.interval: 60
-module.1.position: middle
+# Auto-start: PipeWire/WirePlumber, bar, then sxwm via startx on tty1 login
+cat > "$HOME/.xinitrc" <<'EOF'
+pipewire &
+wireplumber &
+sxbar &
+exec sxwm
+EOF
+chmod +x "$HOME/.xinitrc"
 
-# right: network, audio, battery
-module.2.name: net
-module.2.cmd: ping -c1 -W1 1.1.1.1 >/dev/null && echo "Online" || echo "Offline"
-module.2.interval: 30
-module.2.position: right
+PROFILE="$HOME/.bash_profile"
+touch "$PROFILE"
+if ! grep -q 'exec startx' "$PROFILE"; then
+    cat >> "$PROFILE" <<'EOF'
 
-module.3.name: vol
-module.3.cmd: wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk '{print int($2*100)"%"}'
-module.3.interval: 1
-module.3.position: right
-
-module.4.name: bat
-module.4.cmd: cat /sys/class/power_supply/BAT0/capacity 2>/dev/null | sed 's/$/%/' || echo 'N/A'
-module.4.interval: 30
-module.4.position: right
+[ -z "${DISPLAY:-}" ] && [ "$(tty)" = /dev/tty1 ] && exec startx
 EOF
 fi
 
-# cterm
-if [ ! -f "$CONFIG_DIR/cterm/cterm.conf" ]; then
-    cat > "$CONFIG_DIR/cterm/cterm.conf" <<EOF
-font_path = $HOME/.local/share/fonts/spleen-5x8.bdf
-EOF
-fi
+# Remove build-only packages and their orphaned dependencies
+$PRIV xbps-remove -Ry git gcc make pkg-config meson ninja \
+    libX11-devel libXinerama-devel libXcursor-devel \
+    libXft-devel freetype-devel fontconfig-devel tar curl || true
+$PRIV xbps-remove -Oy
+rm -rf "$BUILD_DIR"
 
-# ----------------------------------------------------------------------
-# X session autostart (PipeWire, WirePlumber, wallpaper, bar, WM)
-# ----------------------------------------------------------------------
-if [ ! -f "$HOME/.xinitrc" ]; then
-    cat > "$HOME/.xinitrc" <<'EOF'
-#!/bin/sh
-exec dbus-run-session -- sh -c '
-  pipewire &
-  wireplumber &
-  xsetroot -solid "#171717" &
-  sxbar &
-  exec sxwm
-'
-EOF
-    chmod +x "$HOME/.xinitrc"
-fi
-
-# ----------------------------------------------------------------------
-# Remove build-time packages
-# ----------------------------------------------------------------------
-$PRIV xbps-remove -Ry $BUILD_DEPS $SXWM_DEPS $SXBAR_DEPS $CTERM_DEPS
-
-# ----------------------------------------------------------------------
-# Reboot
-# ----------------------------------------------------------------------
-reboot
+$PRIV reboot
