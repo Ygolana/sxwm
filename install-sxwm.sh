@@ -19,7 +19,7 @@ fi
 BUILD_DEPS="gcc make meson ninja pkg-config git"
 SXWM_DEPS="libX11-devel libXinerama-devel libXcursor-devel"
 SXBAR_DEPS="libX11-devel libXinerama-devel libXft-devel fontconfig-devel freetype-devel"
-CTERM_DEPS="libgrapheme-devel libX11-devel"
+CTERM_DEPS="libX11-devel"
 XORG_PKGS="xorg-minimal xinit xf86-video-intel xf86-input-libinput font-misc-misc"
 AUDIO_PKGS="pipewire wireplumber dbus"
 UTIL_PKGS="brightnessctl dmenu"
@@ -32,7 +32,7 @@ install_pkgs() {
 }
 
 cleanup() {
-    rm -rf /tmp/sxwm /tmp/sxbar /tmp/cterm /tmp/spleen
+    rm -rf /tmp/sxwm /tmp/sxbar /tmp/cterm /tmp/spleen /tmp/libgrapheme
 }
 trap cleanup EXIT
 
@@ -40,6 +40,17 @@ trap cleanup EXIT
 # Install system packages
 # ----------------------------------------------------------------------
 install_pkgs $BUILD_DEPS $SXWM_DEPS $SXBAR_DEPS $CTERM_DEPS $XORG_PKGS $AUDIO_PKGS $UTIL_PKGS
+
+# ----------------------------------------------------------------------
+# Build and install libgrapheme (required by cterm)
+# ----------------------------------------------------------------------
+if ! pkg-config --exists libgrapheme; then
+    git clone --depth=1 https://github.com/FRIGN/libgrapheme.git /tmp/libgrapheme
+    cd /tmp/libgrapheme
+    make
+    $PRIV make PREFIX=/usr install
+    cd /
+fi
 
 # ----------------------------------------------------------------------
 # Build and install sxwm
@@ -86,7 +97,7 @@ if [ ! -f "$HOME/.local/share/fonts/spleen-5x8.bdf" ]; then
 fi
 
 # ----------------------------------------------------------------------
-# Enable D‑Bus system service (PipeWire/WirePlumber start in session)
+# Enable D-Bus system service (PipeWire/WirePlumber start in session)
 # ----------------------------------------------------------------------
 $PRIV ln -sf /etc/sv/dbus /var/service/
 
@@ -222,7 +233,7 @@ EOF
 fi
 
 # ----------------------------------------------------------------------
-# Remove build‑time packages
+# Remove build-time packages
 # ----------------------------------------------------------------------
 $PRIV xbps-remove -Ry $BUILD_DEPS $SXWM_DEPS $SXBAR_DEPS $CTERM_DEPS
 
