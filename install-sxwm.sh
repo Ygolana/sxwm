@@ -24,7 +24,8 @@ XORG_PKGS="xorg-minimal xinit xf86-video-intel xf86-input-libinput font-misc-mis
 AUDIO_PKGS="pipewire wireplumber dbus"
 UTIL_PKGS="brightnessctl dmenu"
 
-FALLBACK_MIRROR="https://mirrors.servercentral.com/voidlinux"
+# Official Tier 1 mirror backed by Fastly's global CDN
+FALLBACK_MIRROR="https://repo-fastly.voidlinux.org/"
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -32,14 +33,11 @@ FALLBACK_MIRROR="https://mirrors.servercentral.com/voidlinux"
 change_mirror() {
     local mirror="${1:-$FALLBACK_MIRROR}"
     echo "==> Switching Void Linux mirror to: $mirror" >&2
-    $PRIV mkdir -p /etc/xbps.d
-    for f in /usr/share/xbps.d/*-repository-*.conf; do
-        [ -e "$f" ] || continue
-        local base
-        base=$(basename "$f")
-        [ -f "/etc/xbps.d/$base" ] || $PRIV cp "$f" "/etc/xbps.d/$base"
-    done
-    $PRIV sed -i -E "s|repository=https://[^/]+(/current.*)|repository=$mirror\1|" /etc/xbps.d/*-repository-*.conf
+    # Ensure xmirror is available
+    if ! command -v xmirror >/dev/null 2>&1; then
+        $PRIV xbps-install -Sy xmirror
+    fi
+    $PRIV xmirror --set "$mirror"
     $PRIV xbps-install -S
 }
 
@@ -50,7 +48,7 @@ install_pkgs() {
         return 0
     fi
 
-    echo "==> Package operation failed. Attempting mirror switch..." >&2
+    echo "==> Package operation failed. Switching mirror as a fallback..." >&2
     change_mirror
 
     $PRIV rm -rf /var/cache/xbps/*
