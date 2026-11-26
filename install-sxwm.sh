@@ -28,6 +28,12 @@ UTIL_PKGS="brightnessctl dmenu"
 # Helpers
 # ----------------------------------------------------------------------
 install_pkgs() {
+    # Ensure system is consistent and up-to-date
+    $PRIV xbps-pkgdb -a
+    $PRIV xbps-remove -o
+    $PRIV xbps-install -Syu
+    $PRIV xbps-install -Syu
+    # Install required packages
     $PRIV xbps-install -Sy "$@"
 }
 
