@@ -19,7 +19,7 @@ fi
 BUILD_DEPS="gcc make meson ninja pkg-config git"
 SXWM_DEPS="libX11-devel libXinerama-devel libXcursor-devel"
 SXBAR_DEPS="libX11-devel libXinerama-devel libXft-devel fontconfig-devel freetype-devel"
-CTERM_DEPS="libX11-devel"
+CTERM_DEPS="libX11-devel libXext-devel libXi-devel"
 XORG_PKGS="xorg-minimal xinit xf86-video-intel xf86-input-libinput font-misc-misc"
 AUDIO_PKGS="pipewire wireplumber dbus"
 UTIL_PKGS="brightnessctl dmenu"
