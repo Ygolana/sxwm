@@ -24,25 +24,37 @@ XORG_PKGS="xorg-minimal xinit xf86-video-intel xf86-input-libinput font-misc-mis
 AUDIO_PKGS="pipewire wireplumber dbus"
 UTIL_PKGS="brightnessctl dmenu"
 
+FALLBACK_MIRROR="https://mirrors.servercentral.com/voidlinux"
+
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
 change_mirror() {
-    local new_mirror="${1:-https://mirrors.servercentral.com/voidlinux}"
-    echo "Changing mirror to: $new_mirror"
+    local mirror="${1:-$FALLBACK_MIRROR}"
+    echo "==> Switching Void Linux mirror to: $mirror" >&2
     $PRIV mkdir -p /etc/xbps.d
-    $PRIV cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/
-    $PRIV sed -i "s|https://repo-default.voidlinux.org|$new_mirror|g" /etc/xbps.d/*-repository-*.conf
+    for f in /usr/share/xbps.d/*-repository-*.conf; do
+        [ -e "$f" ] || continue
+        local base
+        base=$(basename "$f")
+        [ -f "/etc/xbps.d/$base" ] || $PRIV cp "$f" "/etc/xbps.d/$base"
+    done
+    $PRIV sed -i -E "s|repository=https://[^/]+(/current.*)|repository=$mirror\1|" /etc/xbps.d/*-repository-*.conf
     $PRIV xbps-install -S
 }
 
 install_pkgs() {
     $PRIV rm -rf /var/cache/xbps/*
-    if ! $PRIV xbps-install -Suv; then
-        echo "Verbose upgrade failed. Trying forced upgrade of blocked libraries..." >&2
-        $PRIV xbps-install -Suv libX11 libXext libXfixes libXrender 2>/dev/null || true
-        $PRIV xbps-install -Syu
+
+    if $PRIV xbps-install -Suv && $PRIV xbps-install -Sy "$@"; then
+        return 0
     fi
+
+    echo "==> Package operation failed. Attempting mirror switch..." >&2
+    change_mirror
+
+    $PRIV rm -rf /var/cache/xbps/*
+    $PRIV xbps-install -Suv
     $PRIV xbps-install -Sy "$@"
 }
 
