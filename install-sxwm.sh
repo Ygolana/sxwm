@@ -28,12 +28,16 @@ UTIL_PKGS="brightnessctl dmenu"
 # Helpers
 # ----------------------------------------------------------------------
 install_pkgs() {
-    # Ensure system is consistent and up-to-date
-    $PRIV xbps-pkgdb -a
-    $PRIV xbps-remove -o
-    $PRIV xbps-install -Syu
-    $PRIV xbps-install -Syu
-    # Install required packages
+    # First attempt a verbose full upgrade
+    if ! $PRIV xbps-install -Suv; then
+        echo "Verbose upgrade failed. Removing conflicting X11 development packages and retrying..." >&2
+        # Remove the packages that typically block X11 upgrades
+        $PRIV xbps-remove -f libXfixes-devel libXrender-devel libXrandr-devel libXcursor-devel 2>/dev/null || true
+        # Force a full upgrade twice (in case xbps itself updates)
+        $PRIV xbps-install -Syu
+        $PRIV xbps-install -Syu
+    fi
+    # Install the packages the script needs
     $PRIV xbps-install -Sy "$@"
 }
 
