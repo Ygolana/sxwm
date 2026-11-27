@@ -48,7 +48,8 @@ meson compile -C "$SRC_DIR/cterm/build"
 $PRIV meson install -C "$SRC_DIR/cterm/build"
 
 # Remove build-only packages
-$PRIV xbps-remove -y $BUILD_PKGS $DEV_PKGS
+DEVEL_PKGS=$(xbps-query -l | awk '{print $2}' | sed -E 's/-[^-]+-[^-]+$//' | grep -E -- '-devel$' || true)
+$PRIV xbps-remove -y $BUILD_PKGS $DEVEL_PKGS
 
 # Configuration
 mkdir -p "$HOME/.config/sxwm" "$HOME/.config/sxbar"
